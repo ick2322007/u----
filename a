@@ -1,0 +1,166 @@
+extern crate minifb;
+extern crate image;
+
+use minifb::{Window, WindowOptions};
+use std::{thread, time};
+use std::cmp::{max, min};
+
+#[derive(Clone, Copy, PartialEq)]
+enum Stone {
+    Empty,
+    Black,
+    White,
+}
+
+struct Board {
+    grid: [[Stone; 8]; 8],
+    current_turn: Stone,
+}
+
+impl Board {
+    fn new() -> Board {
+        let mut board = Board {
+            grid: [[Stone::Empty; 8]; 8],
+            current_turn: Stone::Black,
+        };
+        // 初期配置
+        board.grid[3][3] = Stone::White;
+        board.grid[3][4] = Stone::Black;
+        board.grid[4][3] = Stone::Black;
+        board.grid[4][4] = Stone::White;
+        board
+    }
+
+    fn print_board(&self) {
+        for row in &self.grid {
+            for stone in row {
+                let symbol = match stone {
+                    Stone::Empty => ".",
+                    Stone::Black => "B",
+                    Stone::White => "W",
+                };
+                print!("{} ", symbol);
+            }
+            println!();
+        }
+    }
+
+    fn place_stone(&mut self, x: usize, y: usize) {
+        if self.grid[x][y] == Stone::Empty {
+            self.grid[x][y] = self.current_turn;
+            self.flip_stones(x, y);
+            self.toggle_turn();
+        }
+    }
+
+    fn toggle_turn(&mut self) {
+        self.current_turn = match self.current_turn {
+            Stone::Black => Stone::White,
+            Stone::White => Stone::Black,
+            Stone::Empty => Stone::Empty, // default fallback
+        };
+    }
+
+    // プレイヤーが置いた石の周りに挟まれた相手の石をひっくり返す
+    fn flip_stones(&mut self, x: usize, y: usize) {
+        let directions = [(-1, 0), (1, 0), (0, -1), (0, 1), (-1, -1), (-1, 1), (1, -1), (1, 1)];
+        let opponent = match self.current_turn {
+            Stone::Black => Stone::White,
+            Stone::White => Stone::Black,
+            Stone::Empty => return,
+        };
+
+        for &(dx, dy) in directions.iter() {
+            let mut flip_positions = Vec::new();
+            let mut nx = x as isize;
+            let mut ny = y as isize;
+
+            loop {
+                nx += dx;
+                ny += dy;
+                if nx < 0 || ny < 0 || nx >= 8 || ny >= 8 {
+                    break;
+                }
+                let (nx, ny) = (nx as usize, ny as usize);
+                match self.grid[nx][ny] {
+                    Stone::Empty => break,
+                    s if s == opponent => flip_positions.push((nx, ny)),
+                    s if s == self.current_turn => {
+                        for (fx, fy) in flip_positions {
+                            self.grid[fx][fy] = self.current_turn;
+                        }
+                        break;
+                    }
+                    _ => break,
+                }
+            }
+        }
+    }
+}
+
+fn draw_board(buffer: &mut Vec<u32>, board: &Board) {
+    let tile_size = 64;
+    for y in 0..8 {
+        for x in 0..8 {
+            let x_pos = x * tile_size;
+            let y_pos = y * tile_size;
+            // 背景：緑色
+            let color = if (x + y) % 2 == 0 { 0x006400 } else { 0x228B22 }; // オセロ盤の緑
+            for dy in 0..tile_size {
+                for dx in 0..tile_size {
+                    buffer[(y_pos + dy) * 512 + (x_pos + dx)] = color;
+                }
+            }
+
+            // 縁：黒
+            if x == 0 || y == 0 || x == 7 || y == 7 {
+                for dy in 0..tile_size {
+                    for dx in 0..tile_size {
+                        buffer[(y_pos + dy) * 512 + (x_pos + dx)] = 0x000000; // 黒い縁
+                    }
+                }
+            }
+
+            // 石の描画
+            let stone = board.grid[x][y];
+            let stone_color = match stone {
+                Stone::Black => 0x000000, // 黒石
+                Stone::White => 0xFFFFFF, // 白石
+                _ => continue,
+            };
+            for dy in 0..tile_size {
+                for dx in 0..tile_size {
+                    buffer[(y_pos + dy) * 512 + (x_pos + dx)] = stone_color;
+                }
+            }
+        }
+    }
+}
+
+fn main() {
+    let mut board = Board::new();
+    let mut window = Window::new("Othello - Rust", 512, 512, WindowOptions {
+        borderless: false,
+        transparent: false,
+        title: true,
+        ..WindowOptions::default()
+    }).expect("Unable to create window");
+
+    let mut buffer: Vec<u32> = vec![0; 512 * 512]; // 512x512ピクセルの画面
+    let mut mouse_x = 0;
+    let mut mouse_y = 0;
+
+    while window.is_open() && !window.is_key_down(minifb::Key::Escape) {
+        if let Some(mouse_pos) = window.get_mouse_pos(minifb::MouseMode::Discard) {
+            mouse_x = mouse_pos.0 as usize / 64;
+            mouse_y = mouse_pos.1 as usize / 64;
+        }
+
+        // マウスクリックで石を置く
+        if window.is_mouse_button_pressed(minifb::MouseButton::Left) {
+            board.place_stone(mouse_x, mouse_y);
+        }
+
+        // ボードを描画
+        draw_board(&mut buffer, &board);
+        window.update_with_buffer(&buffer, 512, 512).unwrap();
